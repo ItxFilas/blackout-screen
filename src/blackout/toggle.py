@@ -16,8 +16,8 @@ def _kill(pid):
 
 
 def activate():
-    saved = brightness.get_brightness()
     proc = subprocess.Popen([sys.executable, OVERLAY_PATH])
+    saved = brightness.get_brightness()
     brightness.set_brightness(0)
     state.write_state(proc.pid, saved)
 
