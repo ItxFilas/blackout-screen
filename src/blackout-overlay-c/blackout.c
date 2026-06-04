@@ -125,7 +125,7 @@ static void show(void) {
         zwlr_layer_surface_v1_set_anchor(s->layer_surface, ANCHOR_ALL);
         zwlr_layer_surface_v1_set_exclusive_zone(s->layer_surface, -1);
         zwlr_layer_surface_v1_set_keyboard_interactivity(
-            s->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+            s->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
         zwlr_layer_surface_v1_add_listener(s->layer_surface, &lsurf_listener, s);
         wl_surface_commit(s->wl_surface);   /* request the initial configure */
         wl_list_insert(&surfaces, &s->link);
