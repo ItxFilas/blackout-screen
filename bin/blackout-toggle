@@ -1,37 +1,11 @@
 #!/usr/bin/env bash
+# Toggle the blackout overlay. All state lives in the daemon: SIGUSR1 flips
+# it on/off. No brightness handling — on OLED the black pixels are the blackout.
 PID_FILE="/run/user/$UID/blackout-overlay.pid"
-STATE_FILE="${BLACKOUT_STATE:-$HOME/.cache/blackout/state.json}"
-_DEST=org.kde.Solid.PowerManagement
-_PATH=/org/kde/Solid/PowerManagement/Actions/BrightnessControl
-_IFACE=org.kde.Solid.PowerManagement.Actions.BrightnessControl
-
-_brightness_get() {
-    local out
-    out=$(dbus-send --print-reply --session --dest="$_DEST" "$_PATH" "${_IFACE}.brightness")
-    echo "${out##* }"
-}
-
-_brightness_set() {
-    dbus-send --session --dest="$_DEST" "$_PATH" "${_IFACE}.setBrightnessSilent" "int32:$1"
-}
 
 if [[ ! -f "$PID_FILE" ]] || ! pid=$(<"$PID_FILE") || ! kill -0 "$pid" 2>/dev/null; then
     echo "blackout daemon not running; start with: systemctl --user start blackout-overlay" >&2
     exit 1
 fi
 
-if [[ -f "$STATE_FILE" ]]; then
-    # Deactivate: restore brightness behind the still-black overlay, then
-    # reveal the desktop already at full brightness (no dark flash).
-    saved=$(<"$STATE_FILE")
-    _brightness_set "$saved"
-    kill -USR2 "$pid"
-    rm -f "$STATE_FILE"
-else
-    # Activate: black the screen FIRST so it feels instant, then drop the
-    # backlight in the background where it's hidden by the overlay anyway.
-    kill -USR1 "$pid"
-    saved=$(_brightness_get)
-    _brightness_set 0
-    echo "$saved" > "$STATE_FILE"
-fi
+kill -USR1 "$pid"

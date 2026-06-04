@@ -263,7 +263,7 @@ int main(void) {
         if (pfds[1].revents & POLLIN) {
             struct signalfd_siginfo si;
             while (read(sfd, &si, sizeof(si)) == sizeof(si)) {
-                if      (si.ssi_signo == SIGUSR1) show();
+                if      (si.ssi_signo == SIGUSR1) showing ? hide() : show();
                 else if (si.ssi_signo == SIGUSR2) hide();
                 else { running = 0; break; }
             }
