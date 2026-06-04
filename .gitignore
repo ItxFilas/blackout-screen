@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+
+# blackout-overlay-c build artifacts
+/src/blackout-overlay-c/blackout-overlay
+/src/blackout-overlay-c/wlr-layer-shell-unstable-v1-client-protocol.h
+/src/blackout-overlay-c/wlr-layer-shell-unstable-v1-client-protocol.c
