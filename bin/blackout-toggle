@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+export PYTHONPATH="$HOME/projects/blackout-screen/src"
+exec python3 -m blackout "$@"
