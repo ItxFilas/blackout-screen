@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
+#include "pointer-constraints-unstable-v1-client-protocol.h"
 
 #define ANCHOR_ALL ( \
     ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP    | \
@@ -24,6 +25,10 @@ static struct wl_shm            *shm;
 static struct zwlr_layer_shell_v1 *layer_shell;
 static struct wl_seat           *seat;
 static struct wl_pointer        *pointer;
+static struct wl_surface        *cursor_surface;  /* 1x1 transparent, hides pointer */
+static struct wl_buffer         *cursor_buffer;
+static struct zwp_pointer_constraints_v1 *pointer_constraints;
+static struct zwp_locked_pointer_v1      *locked_pointer;  /* non-NULL while pointer is frozen */
 static struct wl_list outputs;
 static struct wl_list surfaces;
 static bool showing = false;
@@ -55,6 +60,24 @@ static struct wl_buffer *make_black_buffer(int w, int h) {
     close(fd);
     struct wl_buffer *buf = wl_shm_pool_create_buffer(
         pool, 0, w, h, stride, WL_SHM_FORMAT_XRGB8888);
+    wl_shm_pool_destroy(pool);
+    return buf;
+}
+
+/* 1x1 fully transparent buffer for the cursor surface. ftruncate zero-fills,
+   so ARGB8888 is 0x00000000 = transparent. Used to hide the pointer: a plain
+   NULL cursor gets overridden by KWin's "shake cursor" effect, but scaling a
+   transparent pixel stays invisible. */
+static struct wl_buffer *make_transparent_buffer(void) {
+    char path[] = "/tmp/blackout-cur-XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) return NULL;
+    unlink(path);
+    if (ftruncate(fd, 4) < 0) { close(fd); return NULL; }
+    struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, 4);
+    close(fd);
+    struct wl_buffer *buf = wl_shm_pool_create_buffer(
+        pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
     return buf;
 }
@@ -133,9 +156,13 @@ static void hide(void) {
 static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
     uint32_t serial, struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy)
 {
-    /* Attaching a NULL cursor surface hides the pointer for as long as it
-       stays over our surface — which, being fullscreen, is the whole screen. */
-    wl_pointer_set_cursor(wl_pointer, serial, NULL, 0, 0);
+    /* Point the cursor at our 1x1 transparent surface for as long as it stays
+       over the overlay (fullscreen = whole screen). Using a transparent buffer
+       rather than a NULL cursor keeps it invisible even when KWin's shake
+       effect scales the cursor up. */
+    wl_pointer_set_cursor(wl_pointer, serial, cursor_surface, 0, 0);
+    wl_surface_attach(cursor_surface, cursor_buffer, 0, 0);
+    wl_surface_commit(cursor_surface);
 }
 static void ptr_leave(void *d, struct wl_pointer *p, uint32_t serial,
     struct wl_surface *s) {}
@@ -187,6 +214,9 @@ static void reg_global(void *data, struct wl_registry *reg,
            v5 pointer-frame events we don't handle. */
         seat = wl_registry_bind(reg, name, &wl_seat_interface, ver < 4 ? ver : 4);
         wl_seat_add_listener(seat, &seat_listener, NULL);
+    } else if (!strcmp(iface, zwp_pointer_constraints_v1_interface.name)) {
+        pointer_constraints = wl_registry_bind(
+            reg, name, &zwp_pointer_constraints_v1_interface, 1);
     } else if (!strcmp(iface, wl_output_interface.name)) {
         struct output *o = calloc(1, sizeof(*o));
         o->wl_output = wl_registry_bind(reg, name, &wl_output_interface, 3);
@@ -218,6 +248,10 @@ int main(void) {
         fputs("Missing required Wayland protocols\n", stderr);
         return 1;
     }
+
+    /* transparent cursor surface, reused by ptr_enter to hide the pointer */
+    cursor_surface = wl_compositor_create_surface(compositor);
+    cursor_buffer  = make_transparent_buffer();
 
     /* write PID file */
     char pid_path[64];
