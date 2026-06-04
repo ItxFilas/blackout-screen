@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""Disables the display output for AMOLED pixel-off blackout. Re-enables on SIGTERM."""
-import signal
-import subprocess
-import sys
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, Gtk  # noqa: E402
 
 
-def _discover_output():
-    r = subprocess.run(["kscreen-doctor", "-o"], capture_output=True, text=True)
-    for line in r.stdout.splitlines():
-        if "eDP" in line and "Output" in line:
-            for word in line.split():
-                if word.startswith("eDP"):
-                    return word
-    return "eDP-1"
+def _on_draw(area, cr, width, height):
+    cr.set_source_rgb(0, 0, 0)
+    cr.paint()
 
 
-_OUTPUT = _discover_output()
-subprocess.run(["kscreen-doctor", f"output.{_OUTPUT}.disable"], check=False)
+def _on_activate(app):
+    display = Gdk.Display.get_default()
+    monitors = display.get_monitors()
+    for i in range(monitors.get_n_items()):
+        monitor = monitors.get_item(i)
+        win = Gtk.ApplicationWindow(application=app)
+        win.set_decorated(False)
+        win.set_cursor(Gdk.Cursor.new_from_name("none", None))
+        area = Gtk.DrawingArea()
+        area.set_draw_func(_on_draw)
+        win.set_child(area)
+        win.fullscreen_on_monitor(monitor)
+        win.present()
 
 
-def _on_term(sig, frame):
-    subprocess.run(["kscreen-doctor", f"output.{_OUTPUT}.enable"], check=False)
-    sys.exit(0)
-
-
-signal.signal(signal.SIGTERM, _on_term)
-signal.pause()
+app = Gtk.Application(application_id="com.local.blackout")
+app.connect("activate", _on_activate)
+app.run([])

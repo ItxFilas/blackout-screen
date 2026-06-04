@@ -2,7 +2,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 from . import brightness, state
 
@@ -27,7 +26,6 @@ def deactivate():
     s = state.read_state()
     if s:
         _kill(s["overlay_pid"])
-        time.sleep(0.5)  # let overlay's SIGTERM handler re-enable the output
         brightness.set_brightness(s["saved_brightness"])
     state.clear_state()
 
