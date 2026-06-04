@@ -141,6 +141,10 @@ static void show(void) {
 static void hide(void) {
     if (!showing) return;
     showing = false;
+    if (locked_pointer) {
+        zwp_locked_pointer_v1_destroy(locked_pointer);
+        locked_pointer = NULL;
+    }
     struct surface *s, *tmp;
     wl_list_for_each_safe(s, tmp, &surfaces, link) {
         if (s->buffer) wl_buffer_destroy(s->buffer);
@@ -151,6 +155,14 @@ static void hide(void) {
     }
     wl_display_flush(display);
 }
+
+/* ---- locked pointer: events are informational; we just need the freeze ---- */
+static void lp_locked(void *d, struct zwp_locked_pointer_v1 *lp) {}
+static void lp_unlocked(void *d, struct zwp_locked_pointer_v1 *lp) {}
+static const struct zwp_locked_pointer_v1_listener lp_listener = {
+    .locked   = lp_locked,
+    .unlocked = lp_unlocked,
+};
 
 /* ---- pointer: hide the cursor while it is over the overlay ---- */
 static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
@@ -163,6 +175,15 @@ static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
     wl_pointer_set_cursor(wl_pointer, serial, cursor_surface, 0, 0);
     wl_surface_attach(cursor_surface, cursor_buffer, 0, 0);
     wl_surface_commit(cursor_surface);
+    /* Freeze the pointer for as long as the overlay is up: a locked pointer
+       stops emitting motion, so the cursor cannot crawl to a screen edge and
+       trigger KWin's edge-glow (Bug A). Created once; lives until hide(). */
+    if (showing && pointer_constraints && !locked_pointer) {
+        locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
+            pointer_constraints, surface, wl_pointer, NULL,
+            ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+        zwp_locked_pointer_v1_add_listener(locked_pointer, &lp_listener, NULL);
+    }
 }
 static void ptr_leave(void *d, struct wl_pointer *p, uint32_t serial,
     struct wl_surface *s) {}
