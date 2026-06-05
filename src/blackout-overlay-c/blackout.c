@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/signalfd.h>
 #include <unistd.h>
 #include <wayland-client.h>
@@ -64,9 +63,10 @@ static struct wl_buffer *make_black_buffer(int w, int h) {
     int fd = mkstemp(path);
     if (fd < 0) return NULL;
     unlink(path);
+    /* ftruncate zero-fills the new bytes (POSIX), and black XRGB8888 is all
+       zero — so the freshly sized fd is already a black buffer; no mmap/memset
+       needed. */
     if (ftruncate(fd, size) < 0) { close(fd); return NULL; }
-    void *data = mmap(NULL, size, PROT_WRITE, MAP_SHARED, fd, 0);
-    if (data != MAP_FAILED) { memset(data, 0, size); munmap(data, size); }
     struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, size);
     close(fd);
     struct wl_buffer *buf = wl_shm_pool_create_buffer(
@@ -107,14 +107,19 @@ static void lsurf_configure(void *data,
     wl_surface_commit(s->wl_surface);
 }
 
-static void lsurf_closed(void *data, struct zwlr_layer_surface_v1 *ls) {
-    struct surface *s = data;
-    if (s->ksi)          zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
-    if (s->buffer)       wl_buffer_destroy(s->buffer);
+/* Tear down one overlay surface and unlink+free it. Shared by hide() (we drop
+   the overlay) and lsurf_closed() (the compositor dropped it). */
+static void destroy_surface(struct surface *s) {
+    if (s->ksi)    zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
+    if (s->buffer) wl_buffer_destroy(s->buffer);
     zwlr_layer_surface_v1_destroy(s->layer_surface);
     wl_surface_destroy(s->wl_surface);
     wl_list_remove(&s->link);
     free(s);
+}
+
+static void lsurf_closed(void *data, struct zwlr_layer_surface_v1 *ls) {
+    destroy_surface(data);
 }
 
 /* inhibitor active/inactive are informational; while active KWin stops firing
@@ -175,14 +180,8 @@ static void hide(void) {
         locked_pointer = NULL;
     }
     struct surface *s, *tmp;
-    wl_list_for_each_safe(s, tmp, &surfaces, link) {
-        if (s->ksi)    zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
-        if (s->buffer) wl_buffer_destroy(s->buffer);
-        zwlr_layer_surface_v1_destroy(s->layer_surface);
-        wl_surface_destroy(s->wl_surface);
-        wl_list_remove(&s->link);
-        free(s);
-    }
+    wl_list_for_each_safe(s, tmp, &surfaces, link)
+        destroy_surface(s);
     wl_display_flush(display);
 }
 
