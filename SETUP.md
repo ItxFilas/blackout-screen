@@ -5,4 +5,4 @@ Bound via System Settings → Keyboard → Shortcuts → Add New → Command or 
 Stored in ~/.config/kglobalshortcutsrc.
 
 Reinstall wrapper after code changes:
-  install -m 755 ~/projects/blackout-screen/bin/blackout-toggle ~/.local/bin/blackout-toggle
+  install -m 755 ~/Mods/blackout-screen/bin/blackout-toggle ~/.local/bin/blackout-toggle

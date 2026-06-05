@@ -8,7 +8,7 @@
 
 **Tech Stack:** C, libwayland-client, wayland-scanner, wlr-layer-shell + pointer-constraints-unstable-v1 protocols, GNU make. Verification is manual (build → deploy → `spectacle` capture), matching this project's existing untested-daemon pattern — there is no automated test harness for the live daemon (the Python tests under `tests/` cover dead code and are out of scope).
 
-**Working directory:** `/home/filas/projects/blackout-screen` (canonical repo — has commits `233ce02`, `a4c64aa`; do NOT use the divergent copy at `~/Mods/blackout-screen`). All daemon source lives in `src/blackout-overlay-c/`.
+**Working directory:** `/home/filas/Mods/blackout-screen` (canonical repo as of 2026-06-05; the old `~/projects/blackout-screen` copy was deleted). All daemon source lives in `src/blackout-overlay-c/`.
 
 **Environment for verification:** KWin 6.6.5, Wayland, single output eDP-1 1920×1080 @ scale 1.25, OLED. The deploy loop must run in the user's graphical session (it talks to the live compositor).
 

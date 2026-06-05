@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,51 @@
     ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | \
     ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT   | \
     ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)
+
+/* ---- sleep-inhibition via org.freedesktop.PowerManagement.Inhibit ----
+   On show: if no inhibitor is already registered, call Inhibit and remember the
+   cookie.  On hide: release the cookie only if we created it — so a user's
+   manual "Block Sleep" toggle in the KDE applet is left exactly as found. */
+static bool     inhibit_by_us  = false;
+static uint32_t inhibit_cookie = 0;
+
+static bool sleep_inhibit_active(void) {
+    FILE *f = popen("busctl --user call org.freedesktop.PowerManagement"
+                    " /org/freedesktop/PowerManagement/Inhibit"
+                    " org.freedesktop.PowerManagement.Inhibit HasInhibit 2>/dev/null", "r");
+    if (!f) return false;
+    char buf[64]; bool result = false;
+    if (fgets(buf, sizeof(buf), f) && strstr(buf, "true"))
+        result = true;
+    pclose(f);
+    return result;
+}
+
+static void inhibit_sleep(void) {
+    if (sleep_inhibit_active()) { inhibit_by_us = false; return; }
+    FILE *f = popen("busctl --user call org.freedesktop.PowerManagement"
+                    " /org/freedesktop/PowerManagement/Inhibit"
+                    " org.freedesktop.PowerManagement.Inhibit Inhibit"
+                    " ss blackout-overlay 'Screen blacked out' 2>/dev/null", "r");
+    if (!f) { inhibit_by_us = false; return; }
+    char buf[64]; unsigned int v = 0;
+    if (fgets(buf, sizeof(buf), f)) sscanf(buf, "u %u", &v);
+    pclose(f);
+    if (v) { inhibit_cookie = v; inhibit_by_us = true; }
+    else     inhibit_by_us = false;
+}
+
+static void uninhibit_sleep(void) {
+    if (!inhibit_by_us) return;
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+        "busctl --user call org.freedesktop.PowerManagement"
+        " /org/freedesktop/PowerManagement/Inhibit"
+        " org.freedesktop.PowerManagement.Inhibit UnInhibit u %u 2>/dev/null",
+        inhibit_cookie);
+    system(cmd);
+    inhibit_by_us = false; inhibit_cookie = 0;
+}
 
 /* ---- globals ---- */
 static struct wl_display        *display;
@@ -118,8 +164,10 @@ static void destroy_surface(struct surface *s) {
 
 static void lsurf_closed(void *data, struct zwlr_layer_surface_v1 *ls) {
     destroy_surface(data);
-    if (wl_list_empty(&surfaces))
+    if (wl_list_empty(&surfaces)) {
         showing = false;
+        uninhibit_sleep();
+    }
 }
 
 /* inhibitor active/inactive are informational; while active KWin stops firing
@@ -139,6 +187,7 @@ static const struct zwlr_layer_surface_v1_listener lsurf_listener = {
 static void show(void) {
     if (showing) return;
     showing = true;
+    inhibit_sleep();
     struct output *out;
     wl_list_for_each(out, &outputs, link) {
         struct surface *s = calloc(1, sizeof(*s));
@@ -180,6 +229,7 @@ static void hide(void) {
     wl_list_for_each_safe(s, tmp, &surfaces, link)
         destroy_surface(s);
     wl_display_flush(display);
+    uninhibit_sleep();
 }
 
 /* ---- locked pointer: events are informational; we just need the freeze ---- */
@@ -329,8 +379,10 @@ static void reg_global_remove(void *data, struct wl_registry *reg, uint32_t name
     wl_output_destroy(o->wl_output);
     output_drop(o);
     /* If the compositor pulled our last surface, we are no longer showing. */
-    if (wl_list_empty(&surfaces))
+    if (wl_list_empty(&surfaces)) {
         showing = false;
+        uninhibit_sleep();
+    }
 }
 
 static const struct wl_registry_listener reg_listener = {
