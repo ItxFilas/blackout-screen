@@ -1,0 +1,124 @@
+# Blackout overlay: output lifecycle + per-surface state + layered tests
+
+**Date:** 2026-06-05
+**Component:** `src/blackout-overlay-c/blackout.c` (the C wlr-layer-shell daemon)
+**Status:** Approved design, ready for implementation plan
+
+## Problem
+
+A code review of the daemon surfaced two pre-existing correctness bugs and a
+testing gap:
+
+- **P1 — output-unplug crash.** `reg_global_remove` is a no-op. Unplugging a
+  monitor leaves a dangling `wl_output` in the `outputs` list. The next
+  `show()` iterates that list and creates a layer surface on a freed output →
+  protocol error / crash. Realistic trigger: dock/undock, external-display
+  sleep.
+- **P2 — global per-output state.** `locked_pointer` is a file-global singleton
+  (assumes one screen). `lsurf_closed()` (compositor-initiated close) doesn't
+  reset `showing` or destroy `locked_pointer`, so state can desync and the
+  global can dangle when its surface is torn down independently.
+- **Testing gap.** The live C daemon + bash wrapper are untested; only the dead
+  Python tree (`src/blackout/*.py`) has tests.
+
+## Goals
+
+1. Unplugging/replugging a monitor never crashes the daemon.
+2. Per-output resources (surface, buffer, ksi, locked pointer) are owned by the
+   surface and destroyed exactly once, on every path.
+3. Two test layers: hermetic automated lifecycle tests + an opt-in real-KWin
+   integration smoke script.
+
+## Non-goals
+
+- **Live hotplug coverage while shown.** Chosen behavior is **snapshot at
+  toggle**: outputs are enumerated when toggling ON; a monitor plugged in while
+  the overlay is already shown is *not* blacked until the next toggle. Removal
+  while shown is still handled safely (no crash).
+- No change to the `show()` synchronous `wl_display_roundtrip` (intentional
+  anti-flash; black must land on the next compositor frame).
+- No change to the hardcoded `wl_compositor` v4 bind (real minimum — we call
+  `wl_surface.damage_buffer`, a v4 request) or the toggle keycode
+  (`KEY_TOGGLE` 148).
+- The mandatory empty Wayland listener callbacks stay (API boilerplate).
+
+## Design
+
+### Approach (chosen: B — push per-output state into the structs)
+
+Generalize the surface lifecycle so P1 and P2 fall out of one rule — *a surface
+owns all its resources; destroying it is always `destroy_surface()`* — rather
+than special-casing the crash. The `destroy_surface()` helper already exists (a
+prior cleanup commit unified `hide()` and `lsurf_closed()` teardown).
+
+### 1. Output lifecycle (fixes P1)
+
+- Add `uint32_t name;` to `struct output`, set from the registry `name` in
+  `reg_global` when the `wl_output` is bound.
+- Implement `reg_global_remove(name)`:
+  - Walk `outputs`; find the `struct output` whose `name == name`.
+  - If a `struct surface` exists for that output (only possible while
+    `showing`), `destroy_surface()` it.
+  - `wl_output_destroy()` the output proxy, unlink from `outputs`, free.
+- Because `show()` iterates the pruned `outputs` list, a removed monitor is
+  simply not covered. No dangling `wl_output`.
+- **Open implementation detail for the plan:** a `struct surface` does not
+  currently back-reference its `struct output`. The plan must choose how
+  `reg_global_remove` finds the surface to destroy — e.g. store
+  `struct output *output;` (or its `wl_output *`) on `struct surface` and match,
+  or store the surface pointer on the output. Prefer a single back-pointer on
+  `struct surface` set in `show()`.
+
+### 2. Per-surface state (fixes P2)
+
+- Move `locked_pointer` from a file-global into `struct surface`.
+- `ptr_enter` maps the incoming `wl_surface` → its `struct surface` (walk
+  `surfaces`) and locks *that* surface's pointer (created
+  `LIFETIME_PERSISTENT`, as today). The per-surface guard replaces the global
+  `!locked_pointer` guard.
+- `destroy_surface()` destroys `s->locked_pointer` if set — so the locked
+  pointer can never dangle, on any teardown path.
+- When a surface is torn down via the compositor/output path
+  (`lsurf_closed` / `reg_global_remove`) and `wl_list_empty(&surfaces)` becomes
+  true, reset `showing = false` so the next toggle re-shows.
+
+### 3. Tests (layered)
+
+**Layer 1 — automated, hermetic (`make test`)**
+- Spin a nested headless compositor: prefer `sway --headless`, fall back to
+  `cage`; whichever is on `PATH`. If neither is available, skip with a clear
+  message (don't fail the build).
+- Export its `WAYLAND_DISPLAY`, run the daemon against it, then drive:
+  - SIGUSR1 → assert a surface exists per output; SIGUSR2 → assert none.
+  - Add/remove a virtual output (compositor-specific: sway
+    `create_output` / `output … disable`); assert surface count tracks output
+    count and the daemon does not crash.
+  - SIGTERM → assert clean exit (rc 0, PID file removed).
+- This exercises P1/P2 lifecycle and signal handling. It does **not** exercise
+  KWin-specific behavior (shortcuts-inhibit, edge-glow) — that's Layer 2.
+
+**Layer 2 — manual, real KWin (`tests/integration.sh`, opt-in)**
+- Run inside the user's graphical session. Scripts the signal +
+  `spectacle -b -n -f` + `identify` mean-pixel checks:
+  - toggle ON → screenshot mean == `0,0,0`; toggle OFF → mean != 0.
+- Prints a manual checklist for human-only confirmations: Alt+Tab is sealed
+  while shown, the toggle key turns it off, dock/undock doesn't crash.
+- Clearly marked as non-CI (needs a live session, flashes the screen).
+
+## Affected files
+
+- `src/blackout-overlay-c/blackout.c` — struct fields, `reg_global`,
+  `reg_global_remove`, `ptr_enter`, `destroy_surface`, `show`/`hide` glue.
+- `src/blackout-overlay-c/Makefile` — `test` target.
+- `tests/integration.sh` (new), plus whatever harness Layer 1 needs
+  (e.g. `tests/headless_lifecycle.sh`).
+
+## Risks / verification
+
+- Layer 1 fidelity: a nested wlroots compositor is not KWin; it validates
+  protocol/lifecycle, not KWin quirks. Accepted — Layer 2 covers real KWin.
+- Multi-output paths can't be fully verified on the single-monitor laptop
+  except via Layer 1's virtual outputs; Layer 2's dock/undock check is manual.
+- Regression guard: after changes, re-run the existing manual sanity
+  (USR1 → `0,0,0`, USR2 → non-zero) and confirm Alt+Tab seal + toggle-off still
+  work on real KWin.
