@@ -11,6 +11,7 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h"
+#include "outputs.h"
 
 /* evdev keycode of the toggle key: KEY_PROG1 (the Asus WMI hotkey that KDE
    registers as "Launch (1)"/Launch1, physically Fn+Esc). wl_keyboard.key
@@ -43,11 +44,6 @@ static struct wl_list surfaces;
 static bool showing = false;
 
 /* ---- data structures ---- */
-struct output {
-    struct wl_output *wl_output;
-    struct wl_list    link;
-};
-
 struct surface {
     struct wl_surface             *wl_surface;
     struct zwlr_layer_surface_v1  *layer_surface;
@@ -303,9 +299,8 @@ static void reg_global(void *data, struct wl_registry *reg,
         ksi_manager = wl_registry_bind(
             reg, name, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1);
     } else if (!strcmp(iface, wl_output_interface.name)) {
-        struct output *o = calloc(1, sizeof(*o));
-        o->wl_output = wl_registry_bind(reg, name, &wl_output_interface, 3);
-        wl_list_insert(&outputs, &o->link);
+        struct wl_output *wo = wl_registry_bind(reg, name, &wl_output_interface, 3);
+        output_track(&outputs, wo, name);
     }
 }
 

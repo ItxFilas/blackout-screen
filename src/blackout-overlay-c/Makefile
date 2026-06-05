@@ -39,8 +39,8 @@ $(GEN_H3):
 $(GEN_C3):
 	$(SCANNER) private-code $(KSI_XML) $@
 
-blackout-overlay: blackout.c $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)
-	$(CC) $(CFLAGS) -o $@ blackout.c $(GEN_C) $(GEN_C2) $(GEN_C3) $(LIBS)
+blackout-overlay: blackout.c outputs.c outputs.h $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)
+	$(CC) $(CFLAGS) -o $@ blackout.c outputs.c $(GEN_C) $(GEN_C2) $(GEN_C3) $(LIBS)
 
 install: blackout-overlay
 	install -m755 blackout-overlay ~/.local/bin/blackout-overlay
