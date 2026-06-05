@@ -84,20 +84,27 @@ prior cleanup commit unified `hide()` and `lsurf_closed()` teardown).
 
 ### 3. Tests (layered)
 
-**Layer 1 — automated, hermetic (`make test`)**
-- Spin a nested headless compositor: prefer `sway --headless`, fall back to
-  `cage`; whichever is on `PATH`. If neither is available, skip with a clear
-  message (don't fail the build).
-- Export its `WAYLAND_DISPLAY`, run the daemon against it, then drive:
-  - SIGUSR1 → assert a surface exists per output; SIGUSR2 → assert none.
-  - Add/remove a virtual output (compositor-specific: sway
-    `create_output` / `output … disable`); assert surface count tracks output
-    count and the daemon does not crash.
-  - SIGTERM → assert clean exit (rc 0, PID file removed).
-- This exercises P1/P2 lifecycle and signal handling. It does **not** exercise
-  KWin-specific behavior (shortcuts-inhibit, edge-glow) — that's Layer 2.
+> **Tooling note (2026-06-05):** No headless compositor (`sway`/`cage`/
+> `weston`) or capture tool (`grim`) is installed, and the GCC sanitizer
+> runtime is missing. So Layer 1 is implemented as install-free unit tests on
+> extracted logic rather than a nested-compositor harness.
 
-**Layer 2 — manual, real KWin (`tests/integration.sh`, opt-in)**
+**Layer 1 — automated, hermetic, install-free (`make test`)**
+- Extract the output bookkeeping into a small pure module
+  (`outputs.h`/`outputs.c`): `output_track`, `output_find`, `output_drop`,
+  operating on a `wl_list` of `struct output`. These touch only the list and
+  the stored registry `name` — never the `wl_output` proxy — so they link
+  against `libwayland-client` (for the `wl_list` helpers) with **no display
+  connection**.
+- A plain C test (`test_outputs.c`, run by `make test`) asserts:
+  `output_find` returns the node matching a registry name, returns NULL for an
+  absent name, returns the right node among several; `output_drop` removes
+  exactly that node and shrinks the list; the list empties after dropping all.
+- This pins the core of the P1 fix (find/remove the right output by name)
+  deterministically. It does **not** exercise real Wayland protocol or
+  KWin-specific behavior — that's Layer 2.
+
+**Layer 2 — manual, real KWin (`integration-test.sh`, opt-in)**
 - Run inside the user's graphical session. Scripts the signal +
   `spectacle -b -n -f` + `identify` mean-pixel checks:
   - toggle ON → screenshot mean == `0,0,0`; toggle OFF → mean != 0.
@@ -107,11 +114,15 @@ prior cleanup commit unified `hide()` and `lsurf_closed()` teardown).
 
 ## Affected files
 
-- `src/blackout-overlay-c/blackout.c` — struct fields, `reg_global`,
-  `reg_global_remove`, `ptr_enter`, `destroy_surface`, `show`/`hide` glue.
-- `src/blackout-overlay-c/Makefile` — `test` target.
-- `tests/integration.sh` (new), plus whatever harness Layer 1 needs
-  (e.g. `tests/headless_lifecycle.sh`).
+- `src/blackout-overlay-c/outputs.h` (new) — `struct output` + pure
+  track/find/drop declarations.
+- `src/blackout-overlay-c/outputs.c` (new) — pure implementations.
+- `src/blackout-overlay-c/test_outputs.c` (new) — Layer 1 unit tests.
+- `src/blackout-overlay-c/blackout.c` — use the outputs module; per-surface
+  `output` back-pointer + `locked_pointer`; `reg_global`, `reg_global_remove`,
+  `ptr_enter`, `destroy_surface`, `show`/`hide` glue.
+- `src/blackout-overlay-c/Makefile` — link `outputs.c`; add `test` target.
+- `src/blackout-overlay-c/integration-test.sh` (new) — Layer 2 smoke script.
 
 ## Risks / verification
 
