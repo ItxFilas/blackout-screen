@@ -37,7 +37,6 @@ static struct wl_keyboard       *keyboard;
 static struct wl_surface        *cursor_surface;  /* 1x1 transparent, hides pointer */
 static struct wl_buffer         *cursor_buffer;
 static struct zwp_pointer_constraints_v1 *pointer_constraints;
-static struct zwp_locked_pointer_v1      *locked_pointer;  /* non-NULL while pointer is frozen */
 static struct zwp_keyboard_shortcuts_inhibit_manager_v1 *ksi_manager;
 static struct wl_list outputs;
 static struct wl_list surfaces;
@@ -50,6 +49,7 @@ struct surface {
     struct wl_buffer              *buffer;
     struct zwp_keyboard_shortcuts_inhibitor_v1 *ksi;  /* suppresses KWin global shortcuts while focused */
     struct output                 *output;            /* which output this covers */
+    struct zwp_locked_pointer_v1  *locked_pointer;    /* non-NULL while this surface's pointer is frozen */
     struct wl_list                 link;
 };
 
@@ -107,8 +107,9 @@ static void lsurf_configure(void *data,
 /* Tear down one overlay surface and unlink+free it. Shared by hide() (we drop
    the overlay) and lsurf_closed() (the compositor dropped it). */
 static void destroy_surface(struct surface *s) {
-    if (s->ksi)    zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
-    if (s->buffer) wl_buffer_destroy(s->buffer);
+    if (s->locked_pointer) zwp_locked_pointer_v1_destroy(s->locked_pointer);
+    if (s->ksi)            zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
+    if (s->buffer)         wl_buffer_destroy(s->buffer);
     zwlr_layer_surface_v1_destroy(s->layer_surface);
     wl_surface_destroy(s->wl_surface);
     wl_list_remove(&s->link);
@@ -175,10 +176,6 @@ static void show(void) {
 static void hide(void) {
     if (!showing) return;
     showing = false;
-    if (locked_pointer) {
-        zwp_locked_pointer_v1_destroy(locked_pointer);
-        locked_pointer = NULL;
-    }
     struct surface *s, *tmp;
     wl_list_for_each_safe(s, tmp, &surfaces, link)
         destroy_surface(s);
@@ -192,6 +189,15 @@ static const struct zwp_locked_pointer_v1_listener lp_listener = {
     .locked   = lp_locked,
     .unlocked = lp_unlocked,
 };
+
+/* Map a compositor wl_surface back to our surface struct (small N: one per
+   output). Returns NULL if it isn't one of ours. */
+static struct surface *surface_from_wl(struct wl_surface *wl_surface) {
+    struct surface *s;
+    wl_list_for_each(s, &surfaces, link)
+        if (s->wl_surface == wl_surface) return s;
+    return NULL;
+}
 
 /* ---- pointer: hide the cursor while it is over the overlay ---- */
 static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
@@ -207,11 +213,12 @@ static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
     /* Freeze the pointer for as long as the overlay is up: a locked pointer
        stops emitting motion, so the cursor cannot crawl to a screen edge and
        trigger KWin's edge-glow (Bug A). Created once; lives until hide(). */
-    if (showing && pointer_constraints && !locked_pointer) {
-        locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
+    struct surface *s = surface_from_wl(surface);
+    if (showing && pointer_constraints && s && !s->locked_pointer) {
+        s->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
             pointer_constraints, surface, wl_pointer, NULL,
             ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
-        zwp_locked_pointer_v1_add_listener(locked_pointer, &lp_listener, NULL);
+        zwp_locked_pointer_v1_add_listener(s->locked_pointer, &lp_listener, NULL);
     }
 }
 static void ptr_leave(void *d, struct wl_pointer *p, uint32_t serial,
