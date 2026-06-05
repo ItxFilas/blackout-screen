@@ -14,6 +14,11 @@ PC_XML  = $(WP_DIR)/unstable/pointer-constraints/pointer-constraints-unstable-v1
 GEN_H2  = pointer-constraints-unstable-v1-client-protocol.h
 GEN_C2  = pointer-constraints-unstable-v1-client-protocol.c
 
+# keyboard-shortcuts-inhibit (seals the blackout: blocks Alt+Tab etc. while shown)
+KSI_XML = $(WP_DIR)/unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
+GEN_H3  = keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h
+GEN_C3  = keyboard-shortcuts-inhibit-unstable-v1-client-protocol.c
+
 all: blackout-overlay
 
 $(GEN_H): $(PROTO)
@@ -28,11 +33,17 @@ $(GEN_H2):
 $(GEN_C2):
 	$(SCANNER) private-code $(PC_XML) $@
 
-blackout-overlay: blackout.c $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2)
-	$(CC) $(CFLAGS) -o $@ blackout.c $(GEN_C) $(GEN_C2) $(LIBS)
+$(GEN_H3):
+	$(SCANNER) client-header $(KSI_XML) $@
+
+$(GEN_C3):
+	$(SCANNER) private-code $(KSI_XML) $@
+
+blackout-overlay: blackout.c $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)
+	$(CC) $(CFLAGS) -o $@ blackout.c $(GEN_C) $(GEN_C2) $(GEN_C3) $(LIBS)
 
 install: blackout-overlay
 	install -m755 blackout-overlay ~/.local/bin/blackout-overlay
 
 clean:
-	rm -f blackout-overlay $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2)
+	rm -f blackout-overlay $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)

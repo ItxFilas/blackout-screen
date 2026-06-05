@@ -11,6 +11,14 @@
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
+#include "keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h"
+
+/* evdev keycode of the toggle key: KEY_PROG1 (the Asus WMI hotkey that KDE
+   registers as "Launch (1)"/Launch1, physically Fn+Esc). wl_keyboard.key
+   delivers raw evdev codes. While the overlay is up we inhibit KWin's global
+   shortcuts so Alt+Tab et al. can't escape — but that also inhibits this key,
+   so KWin delivers it to us instead and we catch it here to turn off. */
+#define KEY_TOGGLE 148
 
 #define ANCHOR_ALL ( \
     ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP    | \
@@ -25,10 +33,12 @@ static struct wl_shm            *shm;
 static struct zwlr_layer_shell_v1 *layer_shell;
 static struct wl_seat           *seat;
 static struct wl_pointer        *pointer;
+static struct wl_keyboard       *keyboard;
 static struct wl_surface        *cursor_surface;  /* 1x1 transparent, hides pointer */
 static struct wl_buffer         *cursor_buffer;
 static struct zwp_pointer_constraints_v1 *pointer_constraints;
 static struct zwp_locked_pointer_v1      *locked_pointer;  /* non-NULL while pointer is frozen */
+static struct zwp_keyboard_shortcuts_inhibit_manager_v1 *ksi_manager;
 static struct wl_list outputs;
 static struct wl_list surfaces;
 static bool showing = false;
@@ -43,6 +53,7 @@ struct surface {
     struct wl_surface             *wl_surface;
     struct zwlr_layer_surface_v1  *layer_surface;
     struct wl_buffer              *buffer;
+    struct zwp_keyboard_shortcuts_inhibitor_v1 *ksi;  /* suppresses KWin global shortcuts while focused */
     struct wl_list                 link;
 };
 
@@ -98,12 +109,21 @@ static void lsurf_configure(void *data,
 
 static void lsurf_closed(void *data, struct zwlr_layer_surface_v1 *ls) {
     struct surface *s = data;
+    if (s->ksi)          zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
     if (s->buffer)       wl_buffer_destroy(s->buffer);
     zwlr_layer_surface_v1_destroy(s->layer_surface);
     wl_surface_destroy(s->wl_surface);
     wl_list_remove(&s->link);
     free(s);
 }
+
+/* inhibitor active/inactive are informational; while active KWin stops firing
+   its global shortcuts (Alt+Tab, ...) and delivers those keys to us instead. */
+static void ksi_active(void *d, struct zwp_keyboard_shortcuts_inhibitor_v1 *i) {}
+static void ksi_inactive(void *d, struct zwp_keyboard_shortcuts_inhibitor_v1 *i) {}
+static const struct zwp_keyboard_shortcuts_inhibitor_v1_listener ksi_listener = {
+    .active = ksi_active, .inactive = ksi_inactive,
+};
 
 static const struct zwlr_layer_surface_v1_listener lsurf_listener = {
     .configure = lsurf_configure,
@@ -127,6 +147,15 @@ static void show(void) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             s->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
         zwlr_layer_surface_v1_add_listener(s->layer_surface, &lsurf_listener, s);
+        /* Seal the blackout: inhibit KWin's global shortcuts while this surface
+           holds keyboard focus, so Alt+Tab et al. can't escape it. The toggle
+           key is itself a global shortcut, so KWin then delivers it to us
+           instead of firing it — kb_key() catches it to turn the overlay off. */
+        if (ksi_manager && seat) {
+            s->ksi = zwp_keyboard_shortcuts_inhibit_manager_v1_inhibit_shortcuts(
+                ksi_manager, s->wl_surface, seat);
+            zwp_keyboard_shortcuts_inhibitor_v1_add_listener(s->ksi, &ksi_listener, NULL);
+        }
         wl_surface_commit(s->wl_surface);   /* request the initial configure */
         wl_list_insert(&surfaces, &s->link);
     }
@@ -147,6 +176,7 @@ static void hide(void) {
     }
     struct surface *s, *tmp;
     wl_list_for_each_safe(s, tmp, &surfaces, link) {
+        if (s->ksi)    zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
         if (s->buffer) wl_buffer_destroy(s->buffer);
         zwlr_layer_surface_v1_destroy(s->layer_surface);
         wl_surface_destroy(s->wl_surface);
@@ -202,6 +232,31 @@ static const struct wl_pointer_listener ptr_listener = {
     .axis   = ptr_axis,
 };
 
+/* ---- keyboard ----
+   We bind a wl_keyboard so that, while the overlay (EXCLUSIVE keyboard
+   interactivity) is mapped, KWin has a focus target and routes the keyboard to
+   us — apps below get nothing. Binding is what makes the grab actually swallow:
+   with the interactivity flag set but no keyboard bound, KWin leaves focus on
+   the window below and keys pass through. We swallow everything except the
+   toggle key: because we inhibit shortcuts while shown, KWin delivers KEY_TOGGLE
+   to us instead of firing the global shortcut, so we treat it as the off switch.
+   The keymap fd is closed so we don't leak one. SIGUSR2 is the escape hatch. */
+static void kb_keymap(void *d, struct wl_keyboard *k, uint32_t fmt, int32_t fd, uint32_t size) { close(fd); }
+static void kb_enter(void *d, struct wl_keyboard *k, uint32_t serial, struct wl_surface *s, struct wl_array *keys) {}
+static void kb_leave(void *d, struct wl_keyboard *k, uint32_t serial, struct wl_surface *s) {}
+static void kb_key(void *d, struct wl_keyboard *k, uint32_t serial, uint32_t t, uint32_t key, uint32_t st) {
+    /* The toggle key reaches us (not KWin) because shortcuts are inhibited while
+       shown. Act on press; the matching release lands after hide(), harmless. */
+    if (st == WL_KEYBOARD_KEY_STATE_PRESSED && key == KEY_TOGGLE)
+        hide();
+}
+static void kb_mods(void *d, struct wl_keyboard *k, uint32_t serial, uint32_t md, uint32_t ml, uint32_t lk, uint32_t grp) {}
+static void kb_repeat(void *d, struct wl_keyboard *k, int32_t rate, int32_t delay) {}
+static const struct wl_keyboard_listener kb_listener = {
+    .keymap = kb_keymap, .enter = kb_enter, .leave = kb_leave,
+    .key = kb_key, .modifiers = kb_mods, .repeat_info = kb_repeat,
+};
+
 /* ---- seat ---- */
 static void seat_caps(void *data, struct wl_seat *s, uint32_t caps) {
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !pointer) {
@@ -210,6 +265,13 @@ static void seat_caps(void *data, struct wl_seat *s, uint32_t caps) {
     } else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && pointer) {
         wl_pointer_release(pointer);
         pointer = NULL;
+    }
+    if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !keyboard) {
+        keyboard = wl_seat_get_keyboard(s);
+        wl_keyboard_add_listener(keyboard, &kb_listener, NULL);
+    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && keyboard) {
+        wl_keyboard_release(keyboard);
+        keyboard = NULL;
     }
 }
 static void seat_name(void *data, struct wl_seat *s, const char *name) {}
@@ -238,6 +300,9 @@ static void reg_global(void *data, struct wl_registry *reg,
     } else if (!strcmp(iface, zwp_pointer_constraints_v1_interface.name)) {
         pointer_constraints = wl_registry_bind(
             reg, name, &zwp_pointer_constraints_v1_interface, 1);
+    } else if (!strcmp(iface, zwp_keyboard_shortcuts_inhibit_manager_v1_interface.name)) {
+        ksi_manager = wl_registry_bind(
+            reg, name, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1);
     } else if (!strcmp(iface, wl_output_interface.name)) {
         struct output *o = calloc(1, sizeof(*o));
         o->wl_output = wl_registry_bind(reg, name, &wl_output_interface, 3);
