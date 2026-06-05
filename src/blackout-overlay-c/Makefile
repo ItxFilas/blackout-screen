@@ -45,5 +45,17 @@ blackout-overlay: blackout.c $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(G
 install: blackout-overlay
 	install -m755 blackout-overlay ~/.local/bin/blackout-overlay
 
+# --- Layer 1 unit tests (pure logic; no compositor / display needed) ---
+TEST_BIN = test-outputs
+test: $(TEST_BIN)
+	./$(TEST_BIN)
+
+$(TEST_BIN): test_outputs.c outputs.c outputs.h
+	$(CC) $(CFLAGS) -o $@ test_outputs.c outputs.c $(LIBS)
+
+# --- Layer 2 smoke (run inside a live KWin session; flashes the screen) ---
+smoke:
+	./integration-test.sh
+
 clean:
-	rm -f blackout-overlay $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)
+	rm -f blackout-overlay $(TEST_BIN) $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)
