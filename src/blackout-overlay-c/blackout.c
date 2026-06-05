@@ -49,6 +49,7 @@ struct surface {
     struct zwlr_layer_surface_v1  *layer_surface;
     struct wl_buffer              *buffer;
     struct zwp_keyboard_shortcuts_inhibitor_v1 *ksi;  /* suppresses KWin global shortcuts while focused */
+    struct output                 *output;            /* which output this covers */
     struct wl_list                 link;
 };
 
@@ -116,6 +117,8 @@ static void destroy_surface(struct surface *s) {
 
 static void lsurf_closed(void *data, struct zwlr_layer_surface_v1 *ls) {
     destroy_surface(data);
+    if (wl_list_empty(&surfaces))
+        showing = false;
 }
 
 /* inhibitor active/inactive are informational; while active KWin stops firing
@@ -138,6 +141,7 @@ static void show(void) {
     struct output *out;
     wl_list_for_each(out, &outputs, link) {
         struct surface *s = calloc(1, sizeof(*s));
+        s->output        = out;
         s->wl_surface    = wl_compositor_create_surface(compositor);
         s->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
             layer_shell, s->wl_surface, out->wl_output,
@@ -304,7 +308,23 @@ static void reg_global(void *data, struct wl_registry *reg,
     }
 }
 
-static void reg_global_remove(void *data, struct wl_registry *reg, uint32_t name) {}
+static void reg_global_remove(void *data, struct wl_registry *reg, uint32_t name) {
+    /* Only outputs are tracked by name; ignore anything else going away. */
+    struct output *o = output_find(&outputs, name);
+    if (!o) return;
+    /* Tear down the blackout surface covering this output, if we have one
+       (only while shown), then drop the output so show() never touches a
+       freed wl_output again. */
+    struct surface *s, *tmp;
+    wl_list_for_each_safe(s, tmp, &surfaces, link)
+        if (s->output == o)
+            destroy_surface(s);
+    wl_output_destroy(o->wl_output);
+    output_drop(o);
+    /* If the compositor pulled our last surface, we are no longer showing. */
+    if (wl_list_empty(&surfaces))
+        showing = false;
+}
 
 static const struct wl_registry_listener reg_listener = {
     .global        = reg_global,
