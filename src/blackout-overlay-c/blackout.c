@@ -12,6 +12,7 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h"
+#include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "outputs.h"
 
 /* evdev keycode of the toggle key: KEY_PROG1 (the Asus WMI hotkey that KDE
@@ -27,51 +28,6 @@
     ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT   | \
     ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)
 
-/* ---- sleep-inhibition via org.freedesktop.PowerManagement.Inhibit ----
-   On show: if no inhibitor is already registered, call Inhibit and remember the
-   cookie.  On hide: release the cookie only if we created it — so a user's
-   manual "Block Sleep" toggle in the KDE applet is left exactly as found. */
-static bool     inhibit_by_us  = false;
-static uint32_t inhibit_cookie = 0;
-
-static bool sleep_inhibit_active(void) {
-    FILE *f = popen("busctl --user call org.freedesktop.PowerManagement"
-                    " /org/freedesktop/PowerManagement/Inhibit"
-                    " org.freedesktop.PowerManagement.Inhibit HasInhibit 2>/dev/null", "r");
-    if (!f) return false;
-    char buf[64]; bool result = false;
-    if (fgets(buf, sizeof(buf), f) && strstr(buf, "true"))
-        result = true;
-    pclose(f);
-    return result;
-}
-
-static void inhibit_sleep(void) {
-    if (sleep_inhibit_active()) { inhibit_by_us = false; return; }
-    FILE *f = popen("busctl --user call org.freedesktop.PowerManagement"
-                    " /org/freedesktop/PowerManagement/Inhibit"
-                    " org.freedesktop.PowerManagement.Inhibit Inhibit"
-                    " ss blackout-overlay 'Screen blacked out' 2>/dev/null", "r");
-    if (!f) { inhibit_by_us = false; return; }
-    char buf[64]; unsigned int v = 0;
-    if (fgets(buf, sizeof(buf), f)) sscanf(buf, "u %u", &v);
-    pclose(f);
-    if (v) { inhibit_cookie = v; inhibit_by_us = true; }
-    else     inhibit_by_us = false;
-}
-
-static void uninhibit_sleep(void) {
-    if (!inhibit_by_us) return;
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-        "busctl --user call org.freedesktop.PowerManagement"
-        " /org/freedesktop/PowerManagement/Inhibit"
-        " org.freedesktop.PowerManagement.Inhibit UnInhibit u %u 2>/dev/null",
-        inhibit_cookie);
-    system(cmd);
-    inhibit_by_us = false; inhibit_cookie = 0;
-}
-
 /* ---- globals ---- */
 static struct wl_display        *display;
 static struct wl_compositor     *compositor;
@@ -84,6 +40,7 @@ static struct wl_surface        *cursor_surface;  /* 1x1 transparent, hides poin
 static struct wl_buffer         *cursor_buffer;
 static struct zwp_pointer_constraints_v1 *pointer_constraints;
 static struct zwp_keyboard_shortcuts_inhibit_manager_v1 *ksi_manager;
+static struct zwp_idle_inhibit_manager_v1 *idle_manager;
 static struct wl_list outputs;
 static struct wl_list surfaces;
 static bool showing = false;
@@ -96,6 +53,7 @@ struct surface {
     struct zwp_keyboard_shortcuts_inhibitor_v1 *ksi;  /* suppresses KWin global shortcuts while focused */
     struct output                 *output;            /* which output this covers */
     struct zwp_locked_pointer_v1  *locked_pointer;    /* non-NULL while this surface's pointer is frozen */
+    struct zwp_idle_inhibitor_v1  *idle_inhibitor;    /* blocks idle dim/lock/sleep while this surface is visible */
     struct wl_list                 link;
 };
 
@@ -153,6 +111,7 @@ static void lsurf_configure(void *data,
 /* Tear down one overlay surface and unlink+free it. Shared by hide() (we drop
    the overlay) and lsurf_closed() (the compositor dropped it). */
 static void destroy_surface(struct surface *s) {
+    if (s->idle_inhibitor) zwp_idle_inhibitor_v1_destroy(s->idle_inhibitor);
     if (s->locked_pointer) zwp_locked_pointer_v1_destroy(s->locked_pointer);
     if (s->ksi)            zwp_keyboard_shortcuts_inhibitor_v1_destroy(s->ksi);
     if (s->buffer)         wl_buffer_destroy(s->buffer);
@@ -166,7 +125,6 @@ static void lsurf_closed(void *data, struct zwlr_layer_surface_v1 *ls) {
     destroy_surface(data);
     if (wl_list_empty(&surfaces)) {
         showing = false;
-        uninhibit_sleep();
     }
 }
 
@@ -187,7 +145,6 @@ static const struct zwlr_layer_surface_v1_listener lsurf_listener = {
 static void show(void) {
     if (showing) return;
     showing = true;
-    inhibit_sleep();
     struct output *out;
     wl_list_for_each(out, &outputs, link) {
         struct surface *s = calloc(1, sizeof(*s));
@@ -211,6 +168,13 @@ static void show(void) {
                 ksi_manager, s->wl_surface, seat);
             zwp_keyboard_shortcuts_inhibitor_v1_add_listener(s->ksi, &ksi_listener, NULL);
         }
+        /* Block idle-triggered dim/lock/sleep for as long as this surface is
+           visible. The compositor scopes the inhibition to surface lifetime,
+           so hide()/crash/unplug all restore power management by themselves —
+           and the user's manual "Block Sleep" applet toggle is never touched. */
+        if (idle_manager)
+            s->idle_inhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(
+                idle_manager, s->wl_surface);
         wl_surface_commit(s->wl_surface);   /* request the initial configure */
         wl_list_insert(&surfaces, &s->link);
     }
@@ -229,7 +193,6 @@ static void hide(void) {
     wl_list_for_each_safe(s, tmp, &surfaces, link)
         destroy_surface(s);
     wl_display_flush(display);
-    uninhibit_sleep();
 }
 
 /* ---- locked pointer: events are informational; we just need the freeze ---- */
@@ -359,6 +322,9 @@ static void reg_global(void *data, struct wl_registry *reg,
     } else if (!strcmp(iface, zwp_keyboard_shortcuts_inhibit_manager_v1_interface.name)) {
         ksi_manager = wl_registry_bind(
             reg, name, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1);
+    } else if (!strcmp(iface, zwp_idle_inhibit_manager_v1_interface.name)) {
+        idle_manager = wl_registry_bind(
+            reg, name, &zwp_idle_inhibit_manager_v1_interface, 1);
     } else if (!strcmp(iface, wl_output_interface.name)) {
         struct wl_output *wo = wl_registry_bind(reg, name, &wl_output_interface, 3);
         output_track(&outputs, wo, name);
@@ -381,7 +347,6 @@ static void reg_global_remove(void *data, struct wl_registry *reg, uint32_t name
     /* If the compositor pulled our last surface, we are no longer showing. */
     if (wl_list_empty(&surfaces)) {
         showing = false;
-        uninhibit_sleep();
     }
 }
 
