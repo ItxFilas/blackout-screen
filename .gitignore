@@ -9,3 +9,5 @@ __pycache__/
 /src/blackout-overlay-c/pointer-constraints-unstable-v1-client-protocol.c
 /src/blackout-overlay-c/keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h
 /src/blackout-overlay-c/keyboard-shortcuts-inhibit-unstable-v1-client-protocol.c
+/src/blackout-overlay-c/idle-inhibit-unstable-v1-client-protocol.h
+/src/blackout-overlay-c/idle-inhibit-unstable-v1-client-protocol.c
