@@ -108,9 +108,13 @@ No changes to the toggle script, systemd unit, or the Python tree.
      throughout.
   3. (Optional, slow) Set screen-lock timeout to 1 min, blackout on, wait —
      no lock screen appears.
-- **Automated check:** `qdbus org.kde.KWin /org/freedesktop/ScreenSaver
-  org.freedesktop.ScreenSaver.GetActive` and PowerDevil's inhibition dump can
-  be scripted in `integration-test.sh` alongside the existing smoke checks.
+- **Automated check:** probing during design showed PowerDevil's
+  `ListInhibitions`/`ActiveInhibitions` do not list foreign inhibitors, so the
+  exact scriptable probe is to be settled during implementation (candidates:
+  PowerDevil `HasInhibition u 4`, logind `ListInhibitors`, applet tooltip
+  text). If none proves reliable, the end-to-end checks above are the
+  verification, appended to the manual checklist used by
+  `integration-test.sh`.
 
 ## Out of scope
 
