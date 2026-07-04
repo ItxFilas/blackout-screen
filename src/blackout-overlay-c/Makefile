@@ -19,6 +19,11 @@ KSI_XML = $(WP_DIR)/unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhib
 GEN_H3  = keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h
 GEN_C3  = keyboard-shortcuts-inhibit-unstable-v1-client-protocol.c
 
+# idle-inhibit (blocks idle-triggered dim/lock/sleep while the overlay is shown)
+II_XML  = $(WP_DIR)/unstable/idle-inhibit/idle-inhibit-unstable-v1.xml
+GEN_H4  = idle-inhibit-unstable-v1-client-protocol.h
+GEN_C4  = idle-inhibit-unstable-v1-client-protocol.c
+
 all: blackout-overlay
 
 $(GEN_H): $(PROTO)
@@ -39,8 +44,14 @@ $(GEN_H3):
 $(GEN_C3):
 	$(SCANNER) private-code $(KSI_XML) $@
 
-blackout-overlay: blackout.c outputs.c outputs.h $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)
-	$(CC) $(CFLAGS) -o $@ blackout.c outputs.c $(GEN_C) $(GEN_C2) $(GEN_C3) $(LIBS)
+$(GEN_H4):
+	$(SCANNER) client-header $(II_XML) $@
+
+$(GEN_C4):
+	$(SCANNER) private-code $(II_XML) $@
+
+blackout-overlay: blackout.c outputs.c outputs.h $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3) $(GEN_H4) $(GEN_C4)
+	$(CC) $(CFLAGS) -o $@ blackout.c outputs.c $(GEN_C) $(GEN_C2) $(GEN_C3) $(GEN_C4) $(LIBS)
 
 install: blackout-overlay
 	install -m755 blackout-overlay ~/.local/bin/blackout-overlay
@@ -58,4 +69,4 @@ smoke:
 	./integration-test.sh
 
 clean:
-	rm -f blackout-overlay $(TEST_BIN) $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3)
+	rm -f blackout-overlay $(TEST_BIN) $(GEN_H) $(GEN_C) $(GEN_H2) $(GEN_C2) $(GEN_H3) $(GEN_C3) $(GEN_H4) $(GEN_C4)
