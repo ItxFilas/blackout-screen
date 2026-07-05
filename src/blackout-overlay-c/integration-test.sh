@@ -35,4 +35,7 @@ cat <<'CHECKLIST'
   [ ] Plug an external monitor, toggle ON            -> both screens black
   [ ] Blackout OFF, unplug a monitor, toggle a few x -> no crash
        (verify: systemctl --user is-active blackout-overlay)
+  [ ] With the manual applet toggle OFF and lock timeout at 1 min: blackout on,
+      wait past the timeout, blackout off -> desktop returns UNLOCKED and undimmed.
+  [ ] Battery applet shows no leftover "blocking sleep" line after blackout off.
 CHECKLIST
