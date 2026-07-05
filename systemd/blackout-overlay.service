@@ -1,0 +1,20 @@
+[Unit]
+Description=Blackout overlay daemon
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/blackout-overlay
+Restart=on-failure
+RestartSec=2
+# Touchpad-disable (see src/blackout-overlay-c/blackout.c show()/hide()) has no
+# compositor-scoped cleanup like the Wayland idle-inhibitor does: if the
+# daemon dies while blacked out (SIGKILL, crash, OOM), the touchpad stays
+# disabled with no obvious cause. ExecStopPost runs on every exit path
+# regardless of cause, so it restores the touchpad even then. The leading
+# "-" means a failure here (e.g. kded_touchpad not running) doesn't fail
+# the stop.
+ExecStopPost=-/usr/bin/busctl --user call org.kde.touchpad /modules/kded_touchpad org.kde.touchpad enable
+
+[Install]
+WantedBy=graphical-session.target
