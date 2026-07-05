@@ -8,6 +8,12 @@ fail() {
 
 INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# --- Pre-flight: kdialog availability (before any fail() calls) ---
+if ! command -v kdialog >/dev/null 2>&1; then
+    echo "Missing required tool: kdialog. This should already be present on any KDE Plasma system - is this really a KDE Plasma session?" >&2
+    exit 1
+fi
+
 # --- Pre-flight: KDE Plasma on Wayland via KWin ---
 if [ "${XDG_SESSION_TYPE:-}" != "wayland" ] || ! pgrep -x kwin_wayland >/dev/null 2>&1; then
     fail "This tool requires KDE Plasma running on Wayland (KWin).
@@ -23,7 +29,7 @@ pkg-config --exists wayland-client || fail "Missing wayland-client development h
 Install your distro's wayland-client development package (e.g. wayland-devel, libwayland-dev) and re-run this installer."
 
 # --- Pre-flight: runtime tools ---
-for tool in busctl kdialog systemctl; do
+for tool in busctl systemctl; do
     command -v "$tool" >/dev/null 2>&1 || fail "Missing required tool: $tool. This should already be present on any KDE Plasma system - is this really a KDE Plasma session?"
 done
 
