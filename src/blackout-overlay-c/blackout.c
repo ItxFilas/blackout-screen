@@ -145,6 +145,13 @@ static const struct zwlr_layer_surface_v1_listener lsurf_listener = {
 static void show(void) {
     if (showing) return;
     showing = true;
+    /* KWin's touchpad gestures (e.g. 4-finger desktop swipe) aren't reachable
+       by any Wayland client-inhibition protocol, so the only way to seal that
+       leak is to disable the touchpad hardware itself. Backgrounded so a
+       slow/hung D-Bus call can't delay the black frame; best-effort, since
+       there is no recovery action if kded_touchpad or busctl is missing. */
+    system("busctl --user call org.kde.touchpad /modules/kded_touchpad"
+           " org.kde.touchpad disable >/dev/null 2>&1 &");
     struct output *out;
     wl_list_for_each(out, &outputs, link) {
         struct surface *s = calloc(1, sizeof(*s));
@@ -189,6 +196,12 @@ static void show(void) {
 static void hide(void) {
     if (!showing) return;
     showing = false;
+    /* Unconditional re-enable: org.kde.touchpad has no query for prior state,
+       so this cannot restore "whatever it was before" the way idle-inhibit
+       does. Confirmed acceptable — manually disabling the touchpad right
+       before triggering blackout isn't a real usage pattern. */
+    system("busctl --user call org.kde.touchpad /modules/kded_touchpad"
+           " org.kde.touchpad enable >/dev/null 2>&1 &");
     struct surface *s, *tmp;
     wl_list_for_each_safe(s, tmp, &surfaces, link)
         destroy_surface(s);

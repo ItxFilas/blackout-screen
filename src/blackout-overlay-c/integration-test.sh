@@ -38,4 +38,6 @@ cat <<'CHECKLIST'
   [ ] With the manual applet toggle OFF and lock timeout at 1 min: blackout on,
       wait past the timeout, blackout off -> desktop returns UNLOCKED and undimmed.
   [ ] Battery applet shows no leftover "blocking sleep" line after blackout off.
+  [ ] Blackout ON, try a touchpad gesture/scroll/click -> no response; blackout
+      OFF -> touchpad responsive again.
 CHECKLIST
