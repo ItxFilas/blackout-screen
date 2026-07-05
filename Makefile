@@ -1,7 +1,10 @@
 DIST_NAME = blackout-screen-install.run
 STAGE := $(shell mktemp -d)
 
+.ONESHELL:
 dist:
+	trap 'rm -rf $(STAGE)' EXIT
+	$(MAKE) -C src/blackout-overlay-c clean
 	mkdir -p $(STAGE)/blackout-screen
 	cp -r src systemd bin $(STAGE)/blackout-screen/
 	cp packaging/install.sh packaging/uninstall.sh $(STAGE)/blackout-screen/
@@ -9,7 +12,6 @@ dist:
 	tar czf $(STAGE)/payload.tar.gz -C $(STAGE) blackout-screen
 	cat packaging/stub.sh $(STAGE)/payload.tar.gz > $(DIST_NAME)
 	chmod +x $(DIST_NAME)
-	rm -rf $(STAGE)
 
 clean-dist:
 	rm -f $(DIST_NAME)
