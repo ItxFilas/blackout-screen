@@ -8,6 +8,6 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 tail -n +"$MARKER_LINE" "$0" | tar xz -C "$TMPDIR"
 cd "$TMPDIR/blackout-screen"
-sh install.sh
+bash install.sh
 exit 0
 __ARCHIVE_BELOW__

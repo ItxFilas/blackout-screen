@@ -71,7 +71,7 @@ fi
 # --- Done: hand off key binding to KDE's own Shortcuts settings ---
 kdialog --msgbox "blackout-screen is installed and running.
 
-Next: choose a key to toggle it. The Shortcuts settings page will open now - search for \"blackout-toggle\" and press your chosen key."
+Next: choose a key to toggle it. The Shortcuts settings page will open now - search for \"blackout-toggle\" and press your chosen key." || true
 
 if command -v systemsettings6 >/dev/null 2>&1; then
     systemsettings6 kcm_keys &
