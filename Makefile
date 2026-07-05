@@ -1,6 +1,7 @@
 DIST_NAME = blackout-screen-install.run
 STAGE := $(shell mktemp -d)
 
+.ONESHELL:
 dist:
 	set -e
 	trap 'rm -rf $(STAGE)' EXIT
